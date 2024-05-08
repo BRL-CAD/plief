@@ -42,8 +42,6 @@ project(PLIEF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/CMake)
-
 include_directories(
   ${CMAKE_CURRENT_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -59,7 +57,6 @@ check_cxx_compiler_flag(-O3 O3_COMPILER_FLAG)
 # Find LIEF. If LIEF was not installed into a default system directory then
 # specify the following option during CMake configuration:
 # -DLIEF_DIR=<LIEF install prefix>/share/LIEF/cmake
-set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
 find_package(LIEF REQUIRED COMPONENTS STATIC) # COMPONENTS: <SHARED | STATIC> - Default: STATIC
 
 add_executable(plief plief.cpp)
