@@ -109,25 +109,25 @@ main(int argc, const char *argv[])
     }
 
     bool bin_mod = false;
-    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_CRITICAL);
+    LIEF::logging::set_level(LIEF::logging::LEVEL::CRITICAL);
     switch (verbose) {
 	case 1:
-	    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_ERR);
+	    LIEF::logging::set_level(LIEF::logging::LEVEL::ERR);
 	    break;
 	case 2:
-	    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_WARN);
+	    LIEF::logging::set_level(LIEF::logging::LEVEL::WARN);
 	    break;
 	case 3:
-	    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_INFO);
+	    LIEF::logging::set_level(LIEF::logging::LEVEL::INFO);
 	    break;
 	case 4:
-	    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_DEBUG);
+	    LIEF::logging::set_level(LIEF::logging::LEVEL::DEBUG);
 	    break;
 	case 5:
-	    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_TRACE);
+	    LIEF::logging::set_level(LIEF::logging::LEVEL::TRACE);
 	    break;
 	default:
-	    LIEF::logging::set_level(LIEF::logging::LOGGING_LEVEL::LOG_CRITICAL);
+	    LIEF::logging::set_level(LIEF::logging::LEVEL::CRITICAL);
     };
 
     std::unique_ptr<LIEF::ELF::Binary> binfo = std::unique_ptr<LIEF::ELF::Binary>{LIEF::ELF::Parser::parse(nonopts[0])};
@@ -138,9 +138,9 @@ main(int argc, const char *argv[])
 
     if (clear_mode) {
 	if (force_rpath) {
-	    binfo->remove(LIEF::ELF::DYNAMIC_TAGS::DT_RPATH);
+	    binfo->remove(LIEF::ELF::DynamicEntry::TAG::RPATH);
 	} else {
-	    binfo->remove(LIEF::ELF::DYNAMIC_TAGS::DT_RUNPATH);
+	    binfo->remove(LIEF::ELF::DynamicEntry::TAG::RUNPATH);
 	}
 	bin_mod = true;
     }
@@ -148,45 +148,47 @@ main(int argc, const char *argv[])
 
     if (add_rpath_val.length()) {
 
-	// Adding a path is not destructive to existing RUNPATH values, so we have
-	// to generate a composite if previous data exists.
-	std::string opath;
-	LIEF::ELF::DynamicEntry *rp = (force_rpath) ?  binfo->get(LIEF::ELF::DYNAMIC_TAGS::DT_RPATH) : binfo->get(LIEF::ELF::DYNAMIC_TAGS::DT_RUNPATH);
-	if (rp) {
-	    if (force_rpath) {
-		opath.append(reinterpret_cast<LIEF::ELF::DynamicEntryRpath*>(rp)->name());
-	    } else {
-		opath.append(reinterpret_cast<LIEF::ELF::DynamicEntryRunPath*>(rp)->name());
-	    }
-	}
-	if (opath.length())
-	    opath.append(std::string(":"));
-	opath.append(add_rpath_val);
-
-	// Clear any old path objects and add the new
+	// Adding a path is not destructive to existing RUNPATH values
 	if (force_rpath) {
-	    binfo->remove(LIEF::ELF::DYNAMIC_TAGS::DT_RPATH);
-	    LIEF::ELF::DynamicEntryRpath npe(opath);
+	    LIEF::ELF::DynamicEntry *rp = binfo->get(LIEF::ELF::DynamicEntry::TAG::RPATH);
+	    LIEF::ELF::DynamicEntryRpath npe;
+	    if (rp) {
+		LIEF::ELF::DynamicEntryRpath *orig = reinterpret_cast<LIEF::ELF::DynamicEntryRpath*>(rp);
+		std::vector<std::string> opaths = orig->paths();
+		for (size_t i = 0; i < opaths.size(); i++) {
+		    npe.append(opaths[i]);
+		}
+	    }
+	    binfo->remove(LIEF::ELF::DynamicEntry::TAG::RPATH);
+	    npe.append(add_rpath_val);
 	    binfo->add(npe);
 	} else {
-	    binfo->remove(LIEF::ELF::DYNAMIC_TAGS::DT_RUNPATH);
-	    LIEF::ELF::DynamicEntryRunPath npe(opath);
+	    LIEF::ELF::DynamicEntry *rp = binfo->get(LIEF::ELF::DynamicEntry::TAG::RUNPATH);
+	    LIEF::ELF::DynamicEntryRunPath npe;
+	    if (rp) {
+		LIEF::ELF::DynamicEntryRunPath *orig = reinterpret_cast<LIEF::ELF::DynamicEntryRunPath*>(rp);
+		std::vector<std::string> opaths = orig->paths();
+		for (size_t i = 0; i < opaths.size(); i++) {
+		    npe.append(opaths[i]);
+		}
+	    }
+	    binfo->remove(LIEF::ELF::DynamicEntry::TAG::RUNPATH);
+	    npe.append(add_rpath_val);
 	    binfo->add(npe);
 	}
 
 	bin_mod = true;
-
     }
 
     if (set_rpath_val.length()) {
 
 	// set-rpath is destructive - clear the old value and add the new
 	if (force_rpath) {
-	    binfo->remove(LIEF::ELF::DYNAMIC_TAGS::DT_RPATH);
+	    binfo->remove(LIEF::ELF::DynamicEntry::TAG::RPATH);
 	    LIEF::ELF::DynamicEntryRpath npe(set_rpath_val);
 	    binfo->add(npe);
 	} else {
-	    binfo->remove(LIEF::ELF::DYNAMIC_TAGS::DT_RUNPATH);
+	    binfo->remove(LIEF::ELF::DynamicEntry::TAG::RUNPATH);
 	    LIEF::ELF::DynamicEntryRunPath npe(set_rpath_val);
 	    binfo->add(npe);
 	}
@@ -202,11 +204,21 @@ main(int argc, const char *argv[])
     if (!bin_mod || print_rpath) {
 	// Doing the lookup here to make sure we have the current, valid binfo
 	// entries for printing
-	LIEF::ELF::DynamicEntry *rp = (force_rpath) ?  binfo->get(LIEF::ELF::DYNAMIC_TAGS::DT_RPATH) : binfo->get(LIEF::ELF::DYNAMIC_TAGS::DT_RUNPATH);
-	if (!force_rpath && rp)
-	    std::cout << reinterpret_cast<LIEF::ELF::DynamicEntryRunPath*>(rp)->name() << '\n';
-	if (force_rpath && rp)
-	    std::cout << reinterpret_cast<LIEF::ELF::DynamicEntryRpath*>(rp)->name() << '\n';
+	LIEF::ELF::DynamicEntry *rp = (force_rpath) ?  binfo->get(LIEF::ELF::DynamicEntry::TAG::RPATH) : binfo->get(LIEF::ELF::DynamicEntry::TAG::RUNPATH);
+	std::vector<std::string> paths;
+	if (rp) {
+	    if (!force_rpath) {
+		paths = reinterpret_cast<LIEF::ELF::DynamicEntryRunPath*>(rp)->paths();
+	    } else {
+		paths = reinterpret_cast<LIEF::ELF::DynamicEntryRpath*>(rp)->paths();
+	    }
+	}
+	if (paths.size()) {
+	    for (size_t i = 0; i < paths.size() - 1; i++) {
+		std::cout << paths[i] << ";";
+	    }
+	    std::cout << paths[paths.size()-1] << "\n";
+	}
     }
 
     return 0;
