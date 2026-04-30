@@ -50,10 +50,13 @@ main(int argc, const char *argv[])
 {
     bool clear_mode = false;
     bool print_rpath = false;
+    bool print_soname = false;
+    bool remove_soname = false;
     bool force_rpath = false; // To manipulate DT_RPATH rather than DT_RUNPATH
     size_t verbose = 0;
     std::string add_rpath_val;
     std::string set_rpath_val;
+    std::string set_soname_val;
     std::vector<std::string> nonopts;
 
     cxxopts::Options options(argv[0], "A program to clear or replace rpaths in binaries\n");
@@ -64,13 +67,16 @@ main(int argc, const char *argv[])
 	    .set_width(70)
 	    .custom_help("[OPTIONS...] binary_file")
 	    .add_options()
-	    ("a,add-rpath",    "Add the specified path to the rpath", cxxopts::value<std::string>(add_rpath_val))
-	    ("c,remove-rpath", "Clear the binary's rpath", cxxopts::value<bool>(clear_mode))
-	    ("force-rpath",    "Report/process the obsolete DT_RPATH property, not DT_RUNPATH", cxxopts::value<bool>(force_rpath))
-	    ("print-rpath",    "Print the value of the rpath", cxxopts::value<bool>(print_rpath))
-	    ("s,set-rpath",    "Set rpath to the specified path, clearing existing values", cxxopts::value<std::string>(set_rpath_val))
-	    ("v,verbose",      "Enable verbose reporting during processing.  Multiple specifications of -v increase reporting level, up to a maximum of 5.")
-	    ("h,help",         "Print help")
+	    ("a,add-rpath",     "Add the specified path to the rpath", cxxopts::value<std::string>(add_rpath_val))
+	    ("c,remove-rpath",  "Clear the binary's rpath", cxxopts::value<bool>(clear_mode))
+	    ("force-rpath",     "Report/process the obsolete DT_RPATH property, not DT_RUNPATH", cxxopts::value<bool>(force_rpath))
+	    ("print-rpath",     "Print the value of the rpath", cxxopts::value<bool>(print_rpath))
+	    ("s,set-rpath",     "Set rpath to the specified path, clearing existing values", cxxopts::value<std::string>(set_rpath_val))
+	    ("print-soname",    "Print the DT_SONAME value (empty if not set)", cxxopts::value<bool>(print_soname))
+	    ("set-soname",      "Set (or replace) the DT_SONAME value", cxxopts::value<std::string>(set_soname_val))
+	    ("remove-soname",   "Remove the DT_SONAME entry", cxxopts::value<bool>(remove_soname))
+	    ("v,verbose",       "Enable verbose reporting during processing.  Multiple specifications of -v increase reporting level, up to a maximum of 5.")
+	    ("h,help",          "Print help")
 	    ;
 	auto result = options.parse(argc, argv);
 
@@ -197,11 +203,24 @@ main(int argc, const char *argv[])
 
     }
 
+    if (remove_soname) {
+	binfo->remove(LIEF::ELF::DynamicEntry::TAG::SONAME);
+	bin_mod = true;
+    }
+
+    if (set_soname_val.length()) {
+	// Replace any existing DT_SONAME with the new value
+	binfo->remove(LIEF::ELF::DynamicEntry::TAG::SONAME);
+	LIEF::ELF::DynamicSharedObject nso(set_soname_val);
+	binfo->add(nso);
+	bin_mod = true;
+    }
+
     // Write out the new version of the binary
     if (bin_mod)
 	binfo->write(nonopts[0]);
 
-    if (!bin_mod || print_rpath) {
+    if (print_rpath || (!bin_mod && !print_soname)) {
 	// Doing the lookup here to make sure we have the current, valid binfo
 	// entries for printing
 	LIEF::ELF::DynamicEntry *rp = (force_rpath) ?  binfo->get(LIEF::ELF::DynamicEntry::TAG::RPATH) : binfo->get(LIEF::ELF::DynamicEntry::TAG::RUNPATH);
@@ -218,6 +237,13 @@ main(int argc, const char *argv[])
 		std::cout << paths[i] << ";";
 	    }
 	    std::cout << paths[paths.size()-1] << "\n";
+	}
+    }
+
+    if (print_soname) {
+	LIEF::ELF::DynamicEntry *so = binfo->get(LIEF::ELF::DynamicEntry::TAG::SONAME);
+	if (so) {
+	    std::cout << reinterpret_cast<LIEF::ELF::DynamicSharedObject*>(so)->name() << "\n";
 	}
     }
 
