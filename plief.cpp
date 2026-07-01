@@ -230,6 +230,22 @@ set_rpath_paths(LIEF::ELF::Binary &binfo, bool force_rpath, const std::vector<st
     }
 }
 
+static bool
+file_is_writable(const std::string &path)
+{
+    std::fstream fs(path, std::ios::in | std::ios::out | std::ios::binary);
+    return static_cast<bool>(fs);
+}
+
+static std::string
+soname_value(LIEF::ELF::Binary *binfo)
+{
+    LIEF::ELF::DynamicEntry *so = binfo->get(LIEF::ELF::DynamicEntry::TAG::SONAME);
+    if (!so)
+	return std::string();
+    return reinterpret_cast<LIEF::ELF::DynamicSharedObject *>(so)->name();
+}
+
 static std::string
 json_escape(const std::string &input)
 {
@@ -383,9 +399,48 @@ process_file(const std::string &fname, const process_opts &p)
 	bin_mod = true;
     }
 
-    // Write out the new version of the binary
-    if (bin_mod)
+    bool verify_rpath = bin_mod && rpath_mod_supported && rpath_mod_requested;
+    std::vector<std::string> expected_rpath_paths;
+    if (verify_rpath)
+	expected_rpath_paths = rpath_paths(*binfo, p.force_rpath);
+
+    bool verify_soname = bin_mod && (p.set_soname_val.length() || p.remove_soname);
+    std::string expected_soname;
+    if (verify_soname)
+	expected_soname = soname_value(binfo.get());
+
+    // Write out the new version of the binary, then verify the requested
+    // dynamic entries survived serialization and can be parsed back in.
+    if (bin_mod) {
+	if (!file_is_writable(fname)) {
+	    std::cerr << "Unable to open " << fname << " for update\n";
+	    return -3;
+	}
 	binfo->write(fname);
+
+	binfo = std::unique_ptr<LIEF::ELF::Binary>{LIEF::ELF::Parser::parse(fname)};
+	if (!binfo) {
+	    std::cerr << "Unable to parse " << fname << " after writing\n";
+	    return -4;
+	}
+
+	if (verify_rpath) {
+	    std::string expected_rpath = path_list_string(expected_rpath_paths);
+	    std::string updated_rpath = rpath_string(*binfo, p.force_rpath);
+	    if (updated_rpath != expected_rpath) {
+		std::cerr << "Failed to update " << (p.force_rpath ? "RPATH" : "RUNPATH") << " on " << fname << ": expected \"" << expected_rpath << "\", got \"" << updated_rpath << "\"\n";
+		return -4;
+	    }
+	}
+
+	if (verify_soname) {
+	    std::string updated_soname = soname_value(binfo.get());
+	    if (updated_soname != expected_soname) {
+		std::cerr << "Failed to update SONAME on " << fname << ": expected \"" << expected_soname << "\", got \"" << updated_soname << "\"\n";
+		return -4;
+	    }
+	}
+    }
 
     if (p.report_rpath_changes && rpath_mod_supported && rpath_mod_requested) {
 	std::string after_rpath = rpath_string(*binfo, p.force_rpath);
@@ -408,11 +463,11 @@ process_file(const std::string &fname, const process_opts &p)
     }
 
     if (p.print_soname) {
-	LIEF::ELF::DynamicEntry *so = binfo->get(LIEF::ELF::DynamicEntry::TAG::SONAME);
-	if (so) {
+	std::string soname = soname_value(binfo.get());
+	if (!soname.empty()) {
 	    if (p.list_output)
 		std::cout << fname << ":";
-	    std::cout << reinterpret_cast<LIEF::ELF::DynamicSharedObject*>(so)->name() << "\n";
+	    std::cout << soname << "\n";
 	}
     }
 
