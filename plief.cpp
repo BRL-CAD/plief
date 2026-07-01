@@ -39,6 +39,8 @@
  */
 
 #include <fstream>
+#include <algorithm>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -121,6 +123,106 @@ contains_path(const std::vector<std::string> &paths, const std::string &path)
 	    return true;
     }
     return false;
+}
+
+static std::vector<std::string>
+expand_path_forms(const std::string &input)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> forms;
+    if (input.empty())
+	return forms;
+
+    auto add_form = [&](const fs::path &p) {
+	std::string s = p.string();
+	if (!s.empty())
+	    forms.push_back(s);
+    };
+
+    auto add_partial_canonical = [&](const fs::path &p) {
+	std::error_code ec;
+	fs::path probe = fs::absolute(p, ec);
+	if (ec)
+	    probe = p;
+
+	fs::path suffix;
+	while (!probe.empty() && !fs::exists(probe, ec)) {
+	    fs::path parent = probe.parent_path();
+	    if (parent == probe)
+		break;
+	    if (suffix.empty())
+		suffix = probe.filename();
+	    else
+		suffix = probe.filename() / suffix;
+	    probe = parent;
+	    ec.clear();
+	}
+
+	if (probe.empty() || !fs::exists(probe, ec))
+	    return;
+
+	ec.clear();
+	fs::path canon = fs::canonical(probe, ec);
+	if (ec || canon.empty())
+	    return;
+
+	if (!suffix.empty())
+	    canon /= suffix;
+	add_form(canon);
+    };
+
+    try {
+	fs::path p(input);
+	add_form(p);
+	std::error_code ec;
+	fs::path abs = fs::absolute(p, ec);
+	if (!ec)
+	    add_form(abs);
+	add_form(p.lexically_normal());
+	if (!ec)
+	    add_form(abs.lexically_normal());
+
+	ec.clear();
+	if (fs::exists(p, ec)) {
+	    fs::path canon = fs::canonical(p, ec);
+	    if (!ec)
+		add_form(canon);
+	}
+
+	add_partial_canonical(p);
+    } catch (...) {
+	// Ignore errors (broken symlink, permission denied, etc).
+    }
+
+    std::sort(forms.begin(), forms.end(),
+	      [](const std::string &a, const std::string &b) {
+		  if (a.size() != b.size())
+		      return a.size() > b.size();
+		  return a > b;
+	      });
+    forms.erase(std::unique(forms.begin(), forms.end()), forms.end());
+
+    return forms;
+}
+
+static std::vector<std::string>
+expand_path_forms(const std::vector<std::string> &inputs)
+{
+    std::vector<std::string> forms;
+    for (const auto &input : inputs) {
+	std::vector<std::string> input_forms = expand_path_forms(input);
+	forms.insert(forms.end(), input_forms.begin(), input_forms.end());
+    }
+
+    std::sort(forms.begin(), forms.end(),
+	      [](const std::string &a, const std::string &b) {
+		  if (a.size() != b.size())
+		      return a.size() > b.size();
+		  return a > b;
+	      });
+    forms.erase(std::unique(forms.begin(), forms.end()), forms.end());
+
+    return forms;
 }
 
 static std::string
@@ -416,7 +518,18 @@ process_file(const std::string &fname, const process_opts &p)
 	    std::cerr << "Unable to open " << fname << " for update\n";
 	    return -3;
 	}
+	std::error_code perms_ec;
+	std::filesystem::perms original_perms = std::filesystem::status(fname, perms_ec).permissions();
+	bool have_original_perms = !perms_ec;
 	binfo->write(fname);
+	if (have_original_perms) {
+	    std::error_code restore_ec;
+	    std::filesystem::permissions(fname, original_perms, std::filesystem::perm_options::replace, restore_ec);
+	    if (restore_ec) {
+		std::cerr << "Unable to restore permissions on " << fname << ": " << restore_ec.message() << "\n";
+		return -4;
+	    }
+	}
 
 	binfo = std::unique_ptr<LIEF::ELF::Binary>{LIEF::ELF::Parser::parse(fname)};
 	if (!binfo) {
@@ -597,6 +710,9 @@ main(int argc, const char *argv[])
 	default:
 	    LIEF::logging::set_level(LIEF::logging::LEVEL::CRITICAL);
     };
+
+    if (p.stale_rpath_prefixes.size())
+	p.stale_rpath_prefixes = expand_path_forms(p.stale_rpath_prefixes);
 
     if (file_list.length()) {
 	std::ifstream instream(file_list);
